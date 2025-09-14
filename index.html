@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>POS Cloud – v3 (Roles + Reports + Email Login)</title>
+<title>POS Cloud – v3 (Full • Roles • Reports • Realtime Settings)</title>
 <style>
   :root{--bg:#0b1220;--card:#111a2e;--muted:#9db1d1;--text:#e8f0ff;--border:#20304f;--pill:#0f1c37}
   *{box-sizing:border-box}
@@ -48,7 +48,7 @@
   <header>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <h1>POS Cloud – Online Shop</h1>
-      <span class="pill">Currency: 
+      <span class="pill">Currency:
         <select id="currency" style="background:transparent;border:0;color:#cfe0ff">
           <option value="MMK" selected>MMK (Ks)</option>
           <option value="THB">THB (฿)</option>
@@ -161,7 +161,7 @@
   <!-- Settings Modal -->
   <div class="modal" id="settingsModal">
     <div class="dialog" style="max-width:760px">
-      <h3>Settings</h3>
+      <h3>Settings (Cloud, Admin only)</h3>
       <div class="grid2">
         <div>
           <label>Delivery Companies (one per line)</label>
@@ -176,6 +176,7 @@
         <button class="btn" id="btnCloseSettings">Close</button>
         <button class="btn primary" id="btnSaveSettings">Save</button>
       </div>
+      <div class="muted" id="settingsLog" style="margin-top:8px"></div>
     </div>
   </div>
 
@@ -231,7 +232,7 @@
   </div>
 
 <script>
-// ===== Helpers =====
+/* ===== Helpers ===== */
 const el=s=>document.querySelector(s), els=s=>document.querySelectorAll(s);
 const state={currency:'MMK', items:[], invoiceNo:invNo()};
 function invNo(){const d=new Date();return `INV-${d.getFullYear()}-${Math.floor(Math.random()*90000+10000)}`;}
@@ -239,40 +240,67 @@ function fmt(n){const map={MMK:'en-US',THB:'th-TH',USD:'en-US'};return new Intl.
 function tick(){el('#invoiceNo').textContent=state.invoiceNo; el('#dateTime').textContent=new Date().toLocaleString();}
 setInterval(tick,1000); tick();
 
-// ===== Settings (Delivery Companies + Staff IDs) =====
+/* ===== Settings (Cloud realtime + local fallback) ===== */
 const SETTINGS_KEY='POS_SETTINGS_V3';
 const settings={deliveryCompanies:['Kerry Express','J&T','BeeXpress'], staffIds:['ST-0001','ST-0002']};
 try{Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY)||'{}'));}catch(_){}
-function saveSettings(){localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));}
+function saveSettingsLocal(){localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));}
 function renderCompanies(){ const sel=el('#deliveryCompany'); sel.innerHTML='<option value="">— Select Company —</option>' + settings.deliveryCompanies.map(c=>`<option>${c}</option>`).join(''); }
 function renderStaffIds(){ const sel=el('#staffId'); sel.innerHTML='<option value="">— Select Staff —</option>' + settings.staffIds.map(s=>`<option>${s}</option>`).join(''); }
 renderCompanies(); renderStaffIds();
-el('#btnSettings').onclick=()=>{ if(!window.__isAdmin){alert('Admin only');return;} el('#setCompanies').value=settings.deliveryCompanies.join('\n'); el('#setStaffIds').value=settings.staffIds.join('\n'); el('#settingsModal').classList.add('open'); };
-el('#btnCloseSettings').onclick=()=> el('#settingsModal').classList.remove('open');
-el('#btnSaveSettings').onclick=()=>{ settings.deliveryCompanies=[...new Set(el('#setCompanies').value.split('\n').map(s=>s.trim()).filter(Boolean))]; settings.staffIds=[...new Set(el('#setStaffIds').value.split('\n').map(s=>s.trim()).filter(Boolean))]; saveSettings(); renderCompanies(); renderStaffIds(); el('#settingsModal').classList.remove('open'); };
 
-// ===== Firebase (Email/Password only) =====
-const firebaseConfig={apiKey:"AIzaSyAW0VAorCd6OHrBR2qqpdZwI92mdIRbtZI",authDomain:"pos-v1-a03b9.firebaseapp.com",projectId:"pos-v1-a03b9",storageBucket:"pos-v1-a03b9.firebasestorage.app",messagingSenderId:"301333181261",appId:"1:301333181261:web:f739e2adc4273edf2bbd04",measurementId:"G-4QGK267QBR"};
+/* ===== Firebase Config (မင်း Project အတွက်) ===== */
+const firebaseConfig={ /* Your provided config */
+  apiKey:"AIzaSyAW0VAorCd6OHrBR2qqpdZwI92mdIRbtZI",
+  authDomain:"pos-v1-a03b9.firebaseapp.com",
+  projectId:"pos-v1-a03b9",
+  storageBucket:"pos-v1-a03b9.firebasestorage.app",
+  messagingSenderId:"301333181261",
+  appId:"1:301333181261:web:f739e2adc4273edf2bbd04",
+  measurementId:"G-4QGK267QBR"
+};
 firebase.initializeApp(firebaseConfig);
-const auth=firebase.auth(); const db=firebase.firestore();
+const auth=firebase.auth();
+const db=firebase.firestore();
 
+/* ===== Realtime settings listener (Admin & Staff အားလုံး) ===== */
+let unsubSettings=null;
+async function startSettingsListener(){
+  if(unsubSettings) { try{unsubSettings();}catch(e){} }
+  unsubSettings = db.collection('settings').doc('global').onSnapshot(snap=>{
+    if(snap.exists){
+      const d=snap.data()||{};
+      settings.deliveryCompanies = Array.isArray(d.deliveryCompanies)?d.deliveryCompanies:[];
+      settings.staffIds          = Array.isArray(d.staffIds)?d.staffIds:[];
+      saveSettingsLocal();
+      renderCompanies(); renderStaffIds();
+      const log=el('#settingsLog'); if(log) log.textContent='Realtime sync ✓';
+    }else{
+      const log=el('#settingsLog'); if(log) log.textContent='No settings/global doc yet. Admin can save to create.';
+    }
+  }, err => {
+    const log=el('#settingsLog'); if(log) log.textContent='Settings listener error: '+err.message;
+  });
+}
+
+/* ===== Role & Auth ===== */
 async function resolveRole(uid){
   try{
     const snap=await db.collection('roles').doc(uid).get();
     const role=(snap.exists && snap.data().role)||'staff';
     window.__role=role; window.__isAdmin=(role==='admin');
     el('#whoRole').textContent=`(${role})`;
-    // Enable/disable buttons
-    el('#btnSaveCloud').disabled=false; // both can create
+    el('#btnSaveCloud').disabled=false; // staff can create orders
     el('#btnLoadCloud').style.display = window.__isAdmin ? '' : 'none';
     el('#btnReports').style.display   = window.__isAdmin ? '' : 'none';
     el('#btnSettings').style.display  = window.__isAdmin ? '' : 'none';
     el('#staffBadge').style.display   = window.__isAdmin ? 'none' : 'inline-block';
+    // realtime settings listener
+    startSettingsListener();
   }catch(e){
     console.warn('role fetch failed',e); el('#whoRole').textContent='(role?)';
   }
 }
-
 auth.onAuthStateChanged(u=>{
   if(u){
     el('#who').textContent=u.email||u.uid;
@@ -292,10 +320,17 @@ el('#btnSignIn').onclick=async()=>{
   try{ await auth.signInWithEmailAndPassword(email,pass); }catch(e){ alert('Sign-in failed: '+e.message); }
 };
 
-// ===== Items & totals =====
-function totals(){ let subtotal=state.items.reduce((s,it)=>s+Number(it.qty)*Number(it.price),0); const fee=Number(el('#deliveryFee').value||0); const disc=Number(el('#discountAmt').value||0); const grand=subtotal+fee-disc; return {subtotal,fee,disc,grand:Math.max(grand,0)}; }
+/* ===== Items & totals ===== */
+function totals(){
+  let subtotal=state.items.reduce((s,it)=>s+Number(it.qty)*Number(it.price),0);
+  const fee=Number(el('#deliveryFee').value||0);
+  const disc=Number(el('#discountAmt').value||0);
+  const grand=subtotal+fee-disc;
+  return {subtotal,fee,disc,grand:Math.max(grand,0)};
+}
 function renderItems(){
-  const tb=el('#itemsTable tbody'); tb.innerHTML=''; state.items.forEach((it,i)=>{
+  const tb=el('#itemsTable tbody'); tb.innerHTML='';
+  state.items.forEach((it,i)=>{
     const tr=document.createElement('tr');
     tr.innerHTML=`<td>${it.code||''}</td><td>${it.name||''}</td><td>${it.color||''}</td><td>${it.size||''}</td><td class="right">${it.qty}</td><td class="right">${fmt(it.price)}</td><td class="right">${fmt(it.qty*it.price)}</td><td class="right no-print"><button class="btn" data-del="${i}">Del</button></td>`;
     tb.appendChild(tr);
@@ -306,8 +341,7 @@ function renderItems(){
 function renderPreview(){
   const staff=el('#staffId').value.trim(), name=el('#custName').value.trim(), phone=el('#custPhone').value.trim(), fbk=el('#custFB').value.trim(), addr=el('#custAddr').value.trim();
   const seller=el('#sellerInfo').value.trim()||'Online Shop', orderType=[...els('input[name="orderType"]')].find(r=>r.checked)?.value||'Self Pickup', company=el('#deliveryCompany').value, tracking=el('#tracking').value.trim();
-  const orderNo=el('#orderNumber').value.trim();
-  const noteTxt=el('#noteInput').value; const t=totals();
+  const orderNo=el('#orderNumber').value.trim(); const noteTxt=el('#noteInput').value; const t=totals();
   const rows=state.items.map(it=>`<tr><td>${it.code||''}</td><td><div>${it.name||''}</div><div class="muted" style="font-size:12px">Color: ${it.color||'-'} | Size: ${it.size||'-'}</div></td><td class="right">${it.qty}</td><td class="right">${fmt(it.price)}</td><td class="right">${fmt(it.qty*it.price)}</td></tr>`).join('');
   el('#invoicePreview').innerHTML=`
   <div style="display:flex;justify-content:space-between;gap:12px">
@@ -348,6 +382,8 @@ function renderPreview(){
 }
 ['#staffId','#custName','#custPhone','#custFB','#custAddr','#deliveryCompany','#tracking','#deliveryFee','#discountAmt','#sellerInfo','#noteInput','#orderNumber'].forEach(s=> el(s).addEventListener('input', renderPreview));
 els('input[name="orderType"]').forEach(r=> r.addEventListener('change', renderPreview));
+
+/* ===== Products handlers ===== */
 el('#btnAdd').onclick=()=>{
   const code=el('#pCode').value.trim().toUpperCase(), name=el('#pName').value.trim(), color=el('#pColor').value.trim(), size=el('#pSize').value.trim();
   const qty=Number(el('#pQty').value||0), price=Number(el('#pPrice').value||0);
@@ -359,11 +395,23 @@ el('#btnAdd').onclick=()=>{
 el('#btnClearItems').onclick=()=>{ if(confirm('Clear all items?')){ state.items=[]; renderItems(); }};
 el('#itemsTable').addEventListener('click',e=>{ const b=e.target.closest('button[data-del]'); if(b){ state.items.splice(Number(b.dataset.del),1); renderItems(); }});
 el('#currency').onchange=e=>{state.currency=e.target.value; renderItems();};
-el('#btnNew').onclick=()=>{ if(!confirm('Start a new order?')) return; state.items=[]; state.invoiceNo=invNo(); document.querySelectorAll('input,textarea,select').forEach(x=>{ if(!['currency'].includes(x.id)) x.value=''; }); el('#pQty').value=1; renderItems(); tick(); };
-el('#btnPrint').onclick=()=>window.print();
-el('#btnJPEG').onclick=async()=>{ const node=el('#invoiceCapture'); renderPreview(); const canvas=await html2canvas(node,{scale:2, backgroundColor:'#0b1426'}); const a=document.createElement('a'); a.href=canvas.toDataURL('image/jpeg',0.95); a.download=`${el('#invoiceNo').textContent||'invoice'}.jpg`; a.click(); };
 
-// ===== Save/Load =====
+/* ===== New / Print / JPEG ===== */
+el('#btnNew').onclick=()=>{
+  if(!confirm('Start a new order?')) return;
+  state.items=[]; state.invoiceNo=invNo();
+  document.querySelectorAll('input,textarea,select').forEach(x=>{ if(!['currency'].includes(x.id)) x.value=''; });
+  el('#pQty').value=1; renderItems(); tick();
+};
+el('#btnPrint').onclick=()=>window.print();
+el('#btnJPEG').onclick=async()=>{
+  const node=el('#invoiceCapture'); renderPreview();
+  const canvas=await html2canvas(node,{scale:2, backgroundColor:'#0b1426'});
+  const a=document.createElement('a'); a.href=canvas.toDataURL('image/jpeg',0.95);
+  a.download=`${el('#invoiceNo').textContent||'invoice'}.jpg`; a.click();
+};
+
+/* ===== Save/Load Orders ===== */
 function collectOrder(){ return {
   invoiceNo:state.invoiceNo,currency:state.currency,date:new Date().toISOString(),
   staffId:el('#staffId').value.trim(),
@@ -376,21 +424,28 @@ function collectOrder(){ return {
 };}
 el('#btnSaveCloud').onclick=async()=>{
   if(!auth.currentUser){alert('Please sign in first.'); return;}
-  try{ const doc=await db.collection('orders').add(collectOrder()); el('#orderId').value=doc.id; alert('Saved: '+doc.id);}catch(e){ alert('Save failed: '+e.message); }
+  try{
+    const doc=await db.collection('orders').add(collectOrder());
+    el('#orderId').value=doc.id; alert('Saved: '+doc.id);
+  }catch(e){ alert('Save failed: '+e.message); }
 };
 el('#btnLoadCloud').onclick=async()=>{
   if(!auth.currentUser){alert('Please sign in first.'); return;}
   if(!window.__isAdmin){alert('Admin only'); return;}
   const id=prompt('Enter Order ID'); if(!id) return;
-  try{ const doc=await db.collection('orders').doc(id).get(); if(!doc.exists){alert('Not found'); return;}
-    const o=doc.data(); state.invoiceNo=o.invoiceNo||invNo(); state.currency=o.currency||'MMK'; el('#currency').value=state.currency;
+  try{
+    const doc=await db.collection('orders').doc(id).get();
+    if(!doc.exists){alert('Not found'); return;}
+    const o=doc.data();
+    state.invoiceNo=o.invoiceNo||invNo(); state.currency=o.currency||'MMK'; el('#currency').value=state.currency;
     el('#staffId').value=o.staffId||''; el('#custName').value=o.customer?.name||''; el('#custPhone').value=o.customer?.phone||''; el('#custFB').value=o.customer?.facebook||''; el('#custAddr').value=o.customer?.address||'';
     const ot=o.orderType||'Self Pickup'; els('input[name="orderType"]').forEach(r=> r.checked=(r.value===ot));
     el('#deliveryCompany').value=o.deliveryCompany||''; el('#tracking').value=o.tracking||''; el('#discountAmt').value=o.discountAmt||0; el('#deliveryFee').value=o.deliveryFee||0; el('#sellerInfo').value=o.sellerInfo||''; el('#noteInput').value=o.note||''; el('#orderNumber').value=o.orderNumber||'';
-    state.items=Array.isArray(o.items)?o.items:[]; renderItems(); tick(); alert('Loaded.'); }catch(e){ alert('Load failed: '+e.message); }
+    state.items=Array.isArray(o.items)?o.items:[]; renderItems(); tick(); alert('Loaded.');
+  }catch(e){ alert('Load failed: '+e.message); }
 };
 
-// ===== Reports (admin only) =====
+/* ===== Reports (admin only) ===== */
 function setRepFiltersFromSettings(){
   const s=el('#repStaff'); s.innerHTML='<option value="">All</option>'+settings.staffIds.map(v=>`<option>${v}</option>`).join('');
   const c=el('#repCo'); c.innerHTML='<option value="">All</option>'+settings.deliveryCompanies.map(v=>`<option>${v}</option>`).join('');
@@ -427,7 +482,7 @@ async function runReport(){
   rows.forEach(r=>{
     const ks=r.staffId||'-'; (staffMap[ks]??={orders:0,revenue:0}); staffMap[ks].orders++; staffMap[ks].revenue+=(r.totals?.grand)||0;
     const kc=r.deliveryCompany||'-'; (coMap[kc]??={orders:0,revenue:0}); coMap[kc].orders++; coMap[kc].revenue+=(r.totals?.grand)||0;
-    (r.items||[]).forEach(it=>{ const k=(it.name||'-')+(it.code?` [${it.code}]`:'');
+    (r.items||[]).forEach(it=>{ const k=(it.name||'-')+(it.code?` [${it.code}]`:'' );
       (pMap[k]??={qty:0,sales:0}); pMap[k].qty+=Number(it.qty||0); pMap[k].sales+=Number(it.qty||0)*Number(it.price||0);
     });
   });
@@ -458,7 +513,10 @@ el('#btnExportCSV').onclick=()=>{
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download="report.csv"; a.click();
 };
 
-// first render
+/* ===== Hook inputs ===== */
+['#deliveryFee','#discountAmt','#sellerInfo','#noteInput','#orderNumber'].forEach(s=> el(s).addEventListener('input', renderPreview));
+['#staffId','#custName','#custPhone','#custFB','#custAddr','#deliveryCompany','#tracking'].forEach(s=> el(s).addEventListener('input', renderPreview));
+els('input[name="orderType"]').forEach(r=> r.addEventListener('change', renderPreview));
 renderItems(); renderPreview();
 </script>
 </body>
