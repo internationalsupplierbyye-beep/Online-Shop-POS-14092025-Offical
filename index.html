@@ -56,7 +56,7 @@
   th,td{padding:10px;border-bottom:1px dashed var(--border);text-align:left;vertical-align:top}
   thead th{color:#111827}
   .right{text-align:right}
-  .muted{color:var(--muted)}
+  .muted{color:#6b7280}
   .invoiceBox{
     background:#ffffff;border:1px solid var(--border);
     border-radius:12px;padding:16px
@@ -254,7 +254,7 @@
       <div><label>Delivery Company</label><select id="repCo"><option value="">All</option></select></div>
       <div style="display:flex;align-items:end;gap:8px">
         <button class="btn" id="btnRunReport">Run</button>
-        <button class="btn" id="btnExportCSV">Export CSV</button>
+        <button class="btn" id="btnExportCSV">Export CSV (Orders FULL)</button>
       </div>
     </div>
     <div class="grid3" style="margin-top:12px">
@@ -633,25 +633,86 @@ async function runReport(){
 }
 el('#btnRunReport').onclick=runReport;
 
-// Export CSV with Customer Data
-function toCSV(rows){ return rows.map(r=> r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n'); }
+/* ======= CSV Export Helpers & FULL EXPORT ======= */
+function toCSV(rows){
+  return rows.map(r=> r.map(x=>`"${String(x??'').replace(/"/g,'""')}"`).join(',')).join('\n');
+}
+
+// Export: Orders FULL (one row per order, include ALL user-entered fields)
 el('#btnExportCSV').onclick=()=>{
   const rows = window.__lastReportRows || [];
-  const csv=[
-    ["docId","date","staffId","orderNumber","deliveryCompany",
-     "subtotal","fee","discount","grand",
-     "customerName","customerPhone","customerFacebook","customerAddress",
-     "itemsCount"],
-    ...rows.map(r=>[
-      r.id, r.date, r.staffId||"", r.orderNumber||"", r.deliveryCompany||"",
-      r.totals?.subtotal||0, r.totals?.fee||0, r.totals?.disc||r.discountAmt||0, r.totals?.grand||0,
-      r.customer?.name||"", r.customer?.phone||"", r.customer?.facebook||"",
-      (r.customer?.address||"").replace(/\n/g," "),
-      Array.isArray(r.items)?r.items.length:0
-    ])
+
+  const header = [
+    "docId","dateISO","invoiceNo","currency",
+    "byUid","staffId",
+    "orderNumber","orderType","deliveryCompany","tracking",
+    "deliveryFee","discountAmt",
+    "subtotal","grand",
+    "sellerInfo",
+    "customerName","customerPhone","customerFacebook","customerAddress",
+    "note",
+    "itemsCount",
+    "itemsText",      // human summary
+    "itemsJSON"       // full JSON array
   ];
+
+  const data = rows.map(r=>{
+    const its = Array.isArray(r.items) ? r.items : [];
+
+    const itemsText = its.map(it=>{
+      const bits = [];
+      if(it.code) bits.push(it.code);
+      if(it.name) bits.push(it.name);
+      const attrs = [it.color||"", it.size||""].filter(Boolean).join(" ");
+      if(attrs) bits.push(`(${attrs})`);
+      const qty = Number(it.qty||0), price = Number(it.price||0);
+      bits.push(`x${qty}@${price}=${qty*price}`);
+      return bits.join(" ");
+    }).join(" | ");
+
+    const itemsJSON = JSON.stringify(its);
+
+    return [
+      r.id || "",
+      r.date || "",
+      r.invoiceNo || "",
+      r.currency || "",
+
+      r.by || "",
+      r.staffId || "",
+
+      r.orderNumber || "",
+      r.orderType || "",
+      r.deliveryCompany || "",
+      r.tracking || "",
+
+      r.deliveryFee ?? 0,
+      r.discountAmt ?? 0,
+
+      r.totals?.subtotal ?? 0,
+      r.totals?.grand ?? 0,
+
+      r.sellerInfo || "",
+
+      r.customer?.name || "",
+      r.customer?.phone || "",
+      r.customer?.facebook || "",
+      (r.customer?.address || "").replace(/\n/g," "),
+
+      (r.note || "").replace(/\n/g," "),
+
+      its.length,
+      itemsText,
+      itemsJSON
+    ];
+  });
+
+  const csv = [header, ...data];
   const blob = new Blob([toCSV(csv)], {type:"text/csv"});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download="report_with_customers.csv"; a.click();
+  const a=document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = "orders_full.csv";
+  a.click();
 };
 
 /* ---------- Wire basic listeners ---------- */
